@@ -933,6 +933,8 @@ static int dump_one_gendev(struct ifinfomsg *ifi, char *kind,
 		return dump_one_netdev(ND_TYPE__TUN, ifi, tb, fds, dump_tun_link);
 	}else if (!strcmp(kind, "gtp")){
 		pr_info("++++++++++++++++ GTP Device found! ++++++++++++++++");
+		
+		//Now using dump_gtp() directly in the callback function
 		return dump_one_netdev(ND_TYPE__GTP, ifi, tb, fds, dump_gtp);	
 	}
 
