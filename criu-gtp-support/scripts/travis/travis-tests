@@ -1,0 +1,131 @@
+#!/bin/sh
+set -x -e
+
+TRAVIS_PKGS="protobuf-c-compiler libprotobuf-c0-dev libaio-dev
+		libprotobuf-dev protobuf-compiler python-ipaddr libcap-dev
+		libnl-3-dev gcc-multilib gdb bash python-protobuf
+		libnet-dev util-linux asciidoc xmlto"
+
+travis_prep () {
+	[ -n "$SKIP_TRAVIS_PREP" ] && return
+
+	cd ../../
+
+	service apport stop
+
+	CC=gcc
+	# clang support
+	if [ "$CLANG" = "1" ]; then
+		TRAVIS_PKGS="$TRAVIS_PKGS clang"
+		CC=clang
+	fi
+
+	# ccache support, only enable for non-GCOV case
+	if [ "$CCACHE" = "1" -a -z "$GCOV" ]; then
+		# ccache is installed by default, need to set it up
+		export CCACHE_DIR=$HOME/.ccache
+		[ "$CC" = "clang" ] && export CCACHE_CPP2=yes
+		# uncomment the following to get detailed ccache logs
+		#export CCACHE_LOGFILE=$HOME/ccache.log
+		CC="ccache $CC"
+	fi
+
+	# The /etc/apt/sources.list in the current trusty image for ppc64le is
+	# broken and needs to be fixed
+	if [ "$TR_ARCH" = "ppc64le" ] ; then
+		sed -i '/security/ d' /etc/apt/sources.list
+	fi
+
+	apt-get update -qq
+	apt-get install -qq --no-install-recommends $TRAVIS_PKGS
+	pip install junit-xml
+	chmod a+x $HOME
+}
+
+travis_prep
+
+ulimit -c unlimited
+echo "|`pwd`/test/abrt.sh %P %p %s %e" > /proc/sys/kernel/core_pattern
+
+export GCOV
+time make CC="$CC" -j4
+
+[ -n "$SKIP_TRAVIS_TEST" ] && return
+
+time make CC="$CC" -j4 -C test/zdtm
+
+[ -f "$CCACHE_LOGFILE" ] && cat $CCACHE_LOGFILE
+
+# umask has to be called before a first criu run, so that .gcda (coverage data)
+# files are created with read-write permissions for all.
+umask 0000
+./criu/criu check
+./criu/criu check --all || echo $?
+./criu/criu cpuinfo dump
+./criu/criu cpuinfo check
+
+export SKIP_PREP=1
+# The 3.19 kernel (from Ubuntu 14.04) has a bug. When /proc/PID/pagemap
+# is read for a few VMAs in one read call, incorrect data is returned.
+# See https://github.com/xemul/criu/issues/207
+# Kernel 4.4 (from Ubuntu 14.04.5 update) fixes this.
+uname -r | grep -q ^3\.19 && export CRIU_PMC_OFF=1
+
+chmod 0777 test/
+chmod 0777 test/zdtm/static
+chmod 0777 test/zdtm/transition
+
+./test/zdtm.py run -a -p 2
+
+KERN_MAJ=`uname -r | cut -d. -f1`
+KERN_MIN=`uname -r | cut -d. -f2`
+if [ $KERN_MAJ -ge "4" ] && [ $KERN_MIN -ge "11" ]; then
+	LAZY_EXCLUDE="-x cmdlinenv00"
+else
+	LAZY_EXCLUDE="-x maps007 -x fork -x fork2 -x uffd-events -x cgroupns
+		      -x socket_listen -x socket_listen6 -x cmdlinenv00
+		      -x socket_close_data01 -x file_read -x lazy-thp"
+fi
+LAZY_EXCLUDE="$LAZY_EXCLUDE -x maps04"
+
+LAZY_TESTS=.*\(maps0\|uffd-events\|lazy-thp\|futex\|fork\).*
+
+./test/zdtm.py run -p 2 -T $LAZY_TESTS --lazy-pages $LAZY_EXCLUDE
+./test/zdtm.py run -p 2 -T $LAZY_TESTS --remote-lazy-pages $LAZY_EXCLUDE
+
+bash ./test/jenkins/criu-fault.sh
+bash ./test/jenkins/criu-fcg.sh
+bash ./test/jenkins/criu-inhfd.sh
+
+make -C test/others/mnt-ext-dev/ run
+#make -C test/others/exec/ run
+make -C test/others/make/ run
+
+./test/zdtm.py run -t zdtm/static/env00 --sibling
+
+./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --dedup
+./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --noauto-dedup
+./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --page-server
+./test/zdtm.py run -t zdtm/transition/maps007 --pre 2 --page-server --dedup
+
+./test/zdtm.py run -t zdtm/static/socket-tcp-local --norst
+
+ip net add test
+./test/zdtm.py run -t zdtm/static/env00 -f h --join-ns
+
+# RPC testing
+./test/zdtm.py run -t zdtm/static/env00 --rpc		# Basic
+./test/zdtm.py run -t zdtm/static/env00 --rpc --pre 2 --page-server
+./test/zdtm.py run -t zdtm/static/ptrace_sig -f h --rpc # Error handling (crfail test)
+
+./test/zdtm.py run --empty-ns -T zdtm/static/socket-tcp*-local --iter 2
+
+pip install flake8
+make lint
+
+# Check that help output fits into 80 columns
+WIDTH=$(./criu/criu --help | wc --max-line-length)
+if [ "$WIDTH" -gt 80 ]; then
+	echo "criu --help output does not obey 80 characters line width!"
+	exit 1
+fi

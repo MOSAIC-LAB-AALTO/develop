@@ -1,0 +1,47 @@
+syntax="proto2";
+
+import "opts.proto";
+
+//ETSI TS29060 GTPV1 HEADER STACK
+message gtpu_entry{
+    required uint32 ml_version                     = 1;
+    required bool   ml_protocol_type               = 2;
+    optional bool   ml_reserved                    = 3;
+    required bool   ml_extension_header_flag       = 4;
+    required bool   ml_sequence_number_flag        = 5;
+    required bool   ml_npdu_number_flag            = 6;
+    required uint32 ml_message_type                = 7;
+    required uint32 ml_message_length              = 8;
+    required uint32 ml_teid                        = 9;
+    optional uint32 ml_sequence_number             = 10;
+    optional uint32 ml_npdu_number                 = 11;
+    optional uint32 ml_next_extension_header_type  = 12;
+};
+
+//ETSI TS29274 GTPV2 HEADER STACK
+message gtpc_entry{
+    required uint32 ml_version                  = 1;
+    required bool   ml_piggybacking_flag        = 2;
+    required bool   ml_teid_flag                = 3;
+    optional uint32 ml_spare                    = 4;
+    required uint32 ml_message_type             = 5;
+    required uint32 ml_message_length           = 6;
+    optional uint32 ml_teid                     = 7;
+    optional uint32 ml_sequence_number          = 8;
+    optional uint32 ml_spare_number             = 9;
+};
+
+
+//GTP USERSPACE ATTRIBUTES FOR GTP TUNNELS
+message gtp_entry{
+    optional uint32 link                    = 1;
+    optional uint32 version                 = 2;
+    optional uint64 tid                     = 3;
+    repeated uint32 peer_addr               = 4;
+    repeated uint32 ms_addr                 = 5;
+    optional uint32 flow                    = 6;
+    optional uint32 net_ns_fd               = 7;
+    optional uint32 i_teid                  = 8;
+    optional uint32 o_teid                  = 9;
+    optional uint32 pad                     = 10;
+};
